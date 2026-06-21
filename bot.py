@@ -431,16 +431,22 @@ async def send_media(context, chat_id, status_msg, path, audio_only, user, title
     filename = os.path.basename(path)
     timeouts = dict(read_timeout=120, write_timeout=300,
                     connect_timeout=30, pool_timeout=120)
+    # The share button rides on the media message itself, so it always shows up
+    # together with the file — never as a separate message above it.
+    share_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("📤 Переслать в чат", switch_inline_query="")]]
+    )
     with open(path, "rb") as f:
         if audio_only:
             sent = await context.bot.send_audio(
                 chat_id=chat_id, audio=f, filename=filename,
-                caption=CAPTION, **timeouts,
+                caption=CAPTION, reply_markup=share_kb, **timeouts,
             )
         else:
             sent = await context.bot.send_video(
                 chat_id=chat_id, video=f, filename=filename,
-                caption=CAPTION, supports_streaming=True, **timeouts,
+                caption=CAPTION, supports_streaming=True,
+                reply_markup=share_kb, **timeouts,
             )
 
     file_id, mtype = None, None
@@ -453,14 +459,12 @@ async def send_media(context, chat_id, status_msg, path, audio_only, user, title
     if file_id:
         remember_media(user.id, file_id, mtype, title)
 
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📤 Поделиться", switch_inline_query="")]]
-    )
-    await safe_edit(
-        status_msg,
-        f"✅ <b>{esc(title)}</b>\nГотово! Можешь переслать в любой чат 👇",
-        reply_markup=keyboard,
-    )
+    # Remove the "📤 Отправляю…" status so only the media (with its button)
+    # remains, in the correct order — right after the user's link.
+    try:
+        await status_msg.delete()
+    except Exception:
+        await safe_edit(status_msg, f"✅ <b>{esc(title)}</b> — готово!")
 
 
 async def process(context, status_msg, chat_id, user, url, audio_only):
