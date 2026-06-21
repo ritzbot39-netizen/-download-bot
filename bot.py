@@ -77,11 +77,11 @@ async def download_file(url, user_id, audio_only=False):
     out_path = os.path.join(user_dir, "%(title)s.%(ext)s")
     env = os.environ.copy()
     if sys.platform == "win32":
-        env["PATH"] = r"C:\Program Files\nodejs;" + env.get("PATH", "")
+        env["PATH"] = r"C:\Program Files\nodejs;" + BASE_DIR + ";" + env.get("PATH", "")
     if audio_only:
-        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-x", "--audio-format", "mp3", "-o", out_path, url]
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "node", "-x", "--audio-format", "mp3", "-o", out_path, url]
     else:
-        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-o", out_path, url]
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "node", "-o", out_path, url]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
     if result.returncode != 0:
         return None, None, result.stderr[:500] if result.stderr else "неизвестная ошибка"
@@ -105,7 +105,8 @@ async def send_file(update, filepath, filename, audio_only):
             f"Сжимаю чтобы влезло, качество может стать чуть хуже"
         )
         compressed = filepath.rsplit(".", 1)[0] + "_compressed.mp4"
-        cmd = ["ffmpeg", "-i", filepath, "-fs", "48M", "-c:v", "libx264", "-preset", "fast", "-crf", "28", "-c:a", "aac", "-b:a", "128k", compressed, "-y"]
+        ffmpeg_cmd = "ffmpeg" if sys.platform != "win32" else os.path.join(BASE_DIR, "ffmpeg.exe")
+        cmd = [ffmpeg_cmd, "-i", filepath, "-fs", "48M", "-c:v", "libx264", "-preset", "fast", "-crf", "28", "-c:a", "aac", "-b:a", "128k", compressed, "-y"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0 and os.path.exists(compressed):
             filepath = compressed
