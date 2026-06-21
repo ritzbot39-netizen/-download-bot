@@ -75,15 +75,12 @@ def get_user_dir(user_id):
 async def download_file(url, user_id, audio_only=False):
     user_dir = get_user_dir(user_id)
     out_path = os.path.join(user_dir, "%(title)s.%(ext)s")
-    env = os.environ.copy()
-    nodejs = r"C:\Program Files\nodejs"
-    paths = [nodejs, env.get("PATH", "")]
-    env["PATH"] = ";".join(paths)
-    yt_dlp_cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "node"]
+    node_exe = r"C:\Program Files\nodejs\node.exe"
+    yt_dlp_cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", f"node:{node_exe}"]
     if audio_only:
         yt_dlp_cmd += ["-x", "--audio-format", "mp3"]
     yt_dlp_cmd += ["-o", out_path, url]
-    result = subprocess.run(yt_dlp_cmd, capture_output=True, text=True, timeout=180, env=env)
+    result = subprocess.run(yt_dlp_cmd, capture_output=True, text=True, timeout=180)
     if result.returncode != 0:
         return None, None, result.stderr[:500] if result.stderr else "неизвестная ошибка"
     files = sorted(os.listdir(user_dir), key=lambda x: os.path.getmtime(os.path.join(user_dir, x)), reverse=True)
