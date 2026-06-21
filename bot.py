@@ -75,11 +75,14 @@ def get_user_dir(user_id):
 async def download_file(url, user_id, audio_only=False):
     user_dir = get_user_dir(user_id)
     out_path = os.path.join(user_dir, "%(title)s.%(ext)s")
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        env["PATH"] = r"C:\Program Files\nodejs;" + env.get("PATH", "")
     if audio_only:
-        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", r"C:\Program Files\nodejs\node.exe", "-x", "--audio-format", "mp3", "-o", out_path, url]
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-x", "--audio-format", "mp3", "-o", out_path, url]
     else:
-        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", r"C:\Program Files\nodejs\node.exe", "-o", out_path, url]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-o", out_path, url]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
     if result.returncode != 0:
         return None, None, result.stderr[:500] if result.stderr else "неизвестная ошибка"
     files = sorted(os.listdir(user_dir), key=lambda x: os.path.getmtime(os.path.join(user_dir, x)), reverse=True)
