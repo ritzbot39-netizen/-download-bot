@@ -1,0 +1,5 @@
+.env
+downloads/
+*.log
+__pycache__/
+users.json

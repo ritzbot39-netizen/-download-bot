@@ -89,6 +89,8 @@ async def download_file(url, user_id, audio_only=False):
     size_mb = round(size / 1024 / 1024, 1)
     return filepath, size_mb, None
 
+CAPTION = "скачано с помощью @SavePitBot_bot"
+
 async def send_file(update, filepath, filename, audio_only):
     size = os.path.getsize(filepath)
     if size > 50 * 1024 * 1024 and not audio_only:
@@ -108,9 +110,11 @@ async def send_file(update, filepath, filename, audio_only):
             return
     with open(filepath, "rb") as f:
         if audio_only:
-            await update.message.reply_audio(audio=f, filename=filename)
+            await update.message.reply_audio(audio=f, filename=filename, caption=CAPTION)
         else:
-            await update.message.reply_video(video=f, filename=filename)
+            keyboard = [[InlineKeyboardButton("поделиться", switch_inline_query="")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_video(video=f, filename=filename, caption=CAPTION, reply_markup=reply_markup)
     try:
         os.unlink(filepath)
     except Exception:
