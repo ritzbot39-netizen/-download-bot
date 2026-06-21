@@ -75,9 +75,9 @@ async def download_file(url, user_id, audio_only=False):
     user_dir = get_user_dir(user_id)
     out_path = os.path.join(user_dir, "%(title)s.%(ext)s")
     if audio_only:
-        cmd = [sys.executable, "-m", "yt_dlp", "-x", "--audio-format", "mp3", "-o", out_path, url]
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-x", "--audio-format", "mp3", "-o", out_path, url]
     else:
-        cmd = [sys.executable, "-m", "yt_dlp", "-o", out_path, url]
+        cmd = [sys.executable, "-m", "yt_dlp", "--js-runtimes", "nodejs", "-o", out_path, url]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if result.returncode != 0:
         return None, None, result.stderr[:500] if result.stderr else "неизвестная ошибка"
@@ -112,9 +112,8 @@ async def send_file(update, filepath, filename, audio_only):
         if audio_only:
             await update.message.reply_audio(audio=f, filename=filename, caption=CAPTION)
         else:
-            keyboard = [[InlineKeyboardButton("поделиться", switch_inline_query="")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_video(video=f, filename=filename, caption=CAPTION, reply_markup=reply_markup)
+            await update.message.reply_video(video=f, filename=filename, caption=CAPTION)
+    await update.message.reply_text("чтобы поделиться — переслани это сообщение")
     try:
         os.unlink(filepath)
     except Exception:
