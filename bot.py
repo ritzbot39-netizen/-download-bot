@@ -3,9 +3,9 @@ import sys
 import json
 import subprocess
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultVideo, InputTextMessageContent
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler,
     filters, ContextTypes
 )
 
@@ -17,6 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
 pending_urls = {}
+shared_videos = {}
 
 def ensure_dir(path):
     if not os.path.exists(path):
@@ -92,6 +93,7 @@ async def download_file(url, user_id, audio_only=False):
 CAPTION = "скачано с помощью @SavePitBot_bot"
 
 async def send_file(update, filepath, filename, audio_only):
+    original = filepath
     size = os.path.getsize(filepath)
     if size > 50 * 1024 * 1024 and not audio_only:
         size_mb = round(size / 1024 / 1024, 1)
@@ -107,17 +109,55 @@ async def send_file(update, filepath, filename, audio_only):
             filename = os.path.basename(compressed)
         else:
             await update.message.reply_text("не удалось сжать, попробуй другое видео")
+            _cleanup(original, None)
             return
     with open(filepath, "rb") as f:
         if audio_only:
-            await update.message.reply_audio(audio=f, filename=filename, caption=CAPTION)
+            msg = await update.message.reply_audio(audio=f, filename=filename, caption=CAPTION)
         else:
-            await update.message.reply_video(video=f, filename=filename, caption=CAPTION)
-    await update.message.reply_text("чтобы поделиться — переслани это сообщение")
-    try:
-        os.unlink(filepath)
-    except Exception:
-        pass
+            msg = await update.message.reply_video(video=f, filename=filename, caption=CAPTION)
+    if msg.video:
+        shared_videos[str(msg.message_id)] = {
+            "file_id": msg.video.file_id,
+            "caption": CAPTION
+        }
+    elif msg.audio:
+        shared_videos[str(msg.message_id)] = {
+            "file_id": msg.audio.file_id,
+            "caption": CAPTION,
+            "audio": True
+        }
+    keyboard = [[InlineKeyboardButton("поделиться", switch_inline_query="share")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("нажми чтобы переслать", reply_markup=reply_markup)
+    _cleanup(original, filepath)
+
+def _cleanup(original, compressed):
+    for f in [original, compressed]:
+        if f and os.path.exists(f):
+            try:
+                os.unlink(f)
+            except Exception:
+                pass
+
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.inline_query.query
+    if not query:
+        results = [
+            InlineQueryResultVideo(
+                id="help",
+                video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                mime_type="video/mp4",
+                thumbnail_url="https://img.youtube.com/vi/dQw4w9WgXcQ/0.jpg",
+                title="кинь ссылку боту в личку",
+                description="скачано с помощью @SavePitBot_bot",
+                caption=CAPTION,
+            )
+        ]
+        await update.inline_query.answer(results, cache_time=1)
+        return
+    user_id = update.inline_query.from_user.id
+    await update.inline_query.answer([], cache_time=1)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_user(update.effective_user)
@@ -222,6 +262,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(InlineQueryHandler(inline_query))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("download bot started", flush=True)
     app.run_polling(drop_pending_updates=True)
