@@ -368,6 +368,59 @@ async def probe_duration(path: str) -> float | None:
     return None
 
 
+async def probe_video_codec(path: str) -> tuple[str, str]:
+    """Returns (codec_name, pix_fmt) for the first video stream."""
+    if not FFPROBE:
+        return "", ""
+    try:
+        rc, out, _ = await run(
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name,pix_fmt",
+             "-of", "default=nw=1:nk=0", path],
+            PROBE_TIMEOUT,
+        )
+        if rc != 0:
+            return "", ""
+        codec, pix = "", ""
+        for line in out.splitlines():
+            if line.startswith("codec_name="):
+                codec = line.split("=", 1)[1].strip()
+            elif line.startswith("pix_fmt="):
+                pix = line.split("=", 1)[1].strip()
+        return codec, pix
+    except Exception:
+        return "", ""
+
+
+async def ensure_ios_compat(src: str, job_dir: str) -> str:
+    """Ensure video plays on iOS: H.264 yuv420p MP4 with faststart.
+
+    Fast path: stream-copy remux when already H.264 + 8-bit (~1 s overhead).
+    Slow path: full re-encode for HEVC, VP9, 10-bit, etc.
+    """
+    if not FFMPEG:
+        return src
+    codec, pix_fmt = await probe_video_codec(src)
+    out = os.path.join(job_dir, "compat.mp4")
+    if codec == "h264" and pix_fmt in ("yuv420p", "yuvj420p"):
+        rc, _, _ = await run(
+            [FFMPEG, "-y", "-i", src, "-c", "copy", "-movflags", "+faststart", out],
+            60, env=build_env(),
+        )
+    else:
+        rc, _, _ = await run(
+            [FFMPEG, "-y", "-i", src,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+             "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "128k",
+             "-movflags", "+faststart", out],
+            COMPRESS_TIMEOUT, env=build_env(),
+        )
+    if rc == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+        return out
+    return src  # ffmpeg failed — send original, better than nothing
+
+
 async def _encode_video(src, dst, vbitrate=None, crf=None, width=1280) -> bool:
     vf = f"scale='min({width},iw)':-2"  # downscale only, keep height even
     cmd = [FFMPEG, "-y", "-i", src, "-vf", vf,
@@ -378,7 +431,7 @@ async def _encode_video(src, dst, vbitrate=None, crf=None, width=1280) -> bool:
                 "-bufsize", str(int(vbitrate * 2))]
     else:
         cmd += ["-crf", str(crf)]
-    cmd += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", dst]
+    cmd += ["-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst]
     rc, _, err = await run(cmd, COMPRESS_TIMEOUT, env=build_env())
     if rc != 0:
         log.warning("ffmpeg encode failed: %s", err[-300:])
@@ -480,6 +533,9 @@ async def process(context, status_msg, chat_id, user, url, audio_only):
             if not path:
                 await safe_edit(status_msg, friendly_error(err))
                 return
+
+            if not audio_only:
+                path = await ensure_ios_compat(path, job_dir)
 
             title = os.path.splitext(os.path.basename(path))[0]
             size = os.path.getsize(path)
