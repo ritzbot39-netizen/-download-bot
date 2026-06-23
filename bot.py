@@ -311,6 +311,13 @@ def _newest_real_file(folder: str) -> str | None:
 async def download(url: str, job_dir: str, audio_only: bool):
     """Download into a private job dir. Returns (filepath, error_message)."""
     out_tmpl = os.path.join(job_dir, "%(title).100B.%(ext)s")
+    cookies_file = os.path.join(BASE_DIR, "cookies.txt")
+    # Write cookies from env var if file doesn't exist yet
+    if not os.path.exists(cookies_file):
+        cookies_env = os.getenv("YOUTUBE_COOKIES", "")
+        if cookies_env:
+            with open(cookies_file, "w", encoding="utf-8") as f:
+                f.write(cookies_env)
     base = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist", "--no-warnings", "--no-progress",
@@ -318,6 +325,8 @@ async def download(url: str, job_dir: str, audio_only: bool):
         "--no-simulate", "--print", "after_move:filepath",
         "-o", out_tmpl,
     ]
+    if os.path.exists(cookies_file):
+        base += ["--cookies", cookies_file]
     if FFMPEG_DIR:
         base += ["--ffmpeg-location", FFMPEG_DIR]
     if audio_only:
