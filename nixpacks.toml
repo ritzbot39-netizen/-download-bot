@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python312", "nodejs_22", "ffmpeg"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python bot.py"
