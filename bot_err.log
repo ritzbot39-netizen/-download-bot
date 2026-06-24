@@ -1,0 +1,4 @@
+2026-06-25 04:41:44,530 INFO download_bot: download bot started
+2026-06-25 04:41:45,051 INFO download_bot: ready: ffmpeg=True ffprobe=False node=True
+2026-06-25 04:41:45,160 INFO apscheduler.scheduler: Scheduler started
+2026-06-25 04:41:45,186 INFO telegram.ext.Application: Application started

@@ -333,8 +333,8 @@ async def download(url: str, job_dir: str, audio_only: bool):
         base += ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
     else:
         base += [
-            "-f", "bestvideo+bestaudio/best",
-            "-S", "res:1080,ext:mp4:m4a",
+            "-f", "bv*+ba/b",
+            "-S", "codec:h264,res:1080,ext:mp4:m4a",
             "--extractor-args", "youtube:player_client=tv_embedded,web",
             "--merge-output-format", "mp4",
         ]
@@ -350,26 +350,25 @@ async def download(url: str, job_dir: str, audio_only: bool):
         rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
 
     # If format not available, retry with simplest possible selector.
-    if rc != 0 and not audio_only and re.search(
+    if rc != 0 and re.search(
         r"requested format is not available", err, re.IGNORECASE
     ):
-        fallback = [x for x in base if x not in (
-            "bestvideo+bestaudio/best", "res:1080,ext:mp4:m4a",
-            "youtube:player_client=tv_embedded,web",
-        )]
-        # Remove flags whose value was one of the above
-        cleaned = []
-        skip_next = False
-        for tok in fallback:
-            if skip_next:
-                skip_next = False
-                continue
-            if tok in ("-f", "-S", "--extractor-args"):
-                skip_next = True
-                continue
-            cleaned.append(tok)
-        cleaned += ["-f", "best", "--merge-output-format", "mp4"]
-        rc, out, err = await run(cleaned + [url], DOWNLOAD_TIMEOUT, env)
+        simple = [
+            sys.executable, "-m", "yt_dlp",
+            "--no-playlist", "--no-warnings", "--no-progress",
+            "--retries", "3", "--fragment-retries", "3",
+            "--no-simulate", "--print", "after_move:filepath",
+            "-o", out_tmpl,
+        ]
+        if os.path.exists(cookies_file):
+            simple += ["--cookies", cookies_file]
+        if FFMPEG_DIR:
+            simple += ["--ffmpeg-location", FFMPEG_DIR]
+        if audio_only:
+            simple += ["-x", "--audio-format", "mp3"]
+        else:
+            simple += ["-f", "b", "--merge-output-format", "mp4"]
+        rc, out, err = await run(simple + [url], DOWNLOAD_TIMEOUT, env)
 
     if rc != 0:
         return None, err
