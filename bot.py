@@ -333,7 +333,9 @@ async def download(url: str, job_dir: str, audio_only: bool):
         base += ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
     else:
         base += [
-            "-f", "bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
+            "-f", "bestvideo+bestaudio/best",
+            "-S", "res:1080,ext:mp4:m4a",
+            "--extractor-args", "youtube:player_client=tv_embedded",
             "--merge-output-format", "mp4",
         ]
 
