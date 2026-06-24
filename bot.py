@@ -335,7 +335,7 @@ async def download(url: str, job_dir: str, audio_only: bool):
         base += [
             "-f", "bestvideo+bestaudio/best",
             "-S", "res:1080,ext:mp4:m4a",
-            "--extractor-args", "youtube:player_client=tv_embedded",
+            "--extractor-args", "youtube:player_client=tv_embedded,web",
             "--merge-output-format", "mp4",
         ]
 
@@ -348,6 +348,28 @@ async def download(url: str, job_dir: str, audio_only: bool):
         r"no such option|unrecognized|js[-_]runtimes", err, re.IGNORECASE
     ):
         rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
+
+    # If format not available, retry with simplest possible selector.
+    if rc != 0 and not audio_only and re.search(
+        r"requested format is not available", err, re.IGNORECASE
+    ):
+        fallback = [x for x in base if x not in (
+            "bestvideo+bestaudio/best", "res:1080,ext:mp4:m4a",
+            "youtube:player_client=tv_embedded,web",
+        )]
+        # Remove flags whose value was one of the above
+        cleaned = []
+        skip_next = False
+        for tok in fallback:
+            if skip_next:
+                skip_next = False
+                continue
+            if tok in ("-f", "-S", "--extractor-args"):
+                skip_next = True
+                continue
+            cleaned.append(tok)
+        cleaned += ["-f", "best", "--merge-output-format", "mp4"]
+        rc, out, err = await run(cleaned + [url], DOWNLOAD_TIMEOUT, env)
 
     if rc != 0:
         return None, err
