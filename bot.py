@@ -339,14 +339,7 @@ async def download(url: str, job_dir: str, audio_only: bool):
         ]
 
     env = build_env()
-    js = ["--js-runtimes", "node"] if NODE_OK else []
-    rc, out, err = await run(base + js + [url], DOWNLOAD_TIMEOUT, env)
-
-    # Older/newer yt-dlp may not know --js-runtimes; retry once without it.
-    if rc != 0 and js and re.search(
-        r"no such option|unrecognized|js[-_]runtimes", err, re.IGNORECASE
-    ):
-        rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
+    rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
 
     # If format not available, retry with simplest possible selector.
     if rc != 0 and re.search(
