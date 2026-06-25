@@ -2,10 +2,10 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "apt-get update && apt-get install -y nodejs ffmpeg curl && curl -sS https://bootstrap.pypa.io/get-pip.py | python3 && python3 -m pip install -r requirements.txt"
+    "buildCommand": "apt-get update && apt-get install -y nodejs ffmpeg python3-pip python3-venv && /usr/bin/python3 -m venv /app/.venv && /app/.venv/bin/pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "python bot.py",
+    "startCommand": "/app/.venv/bin/python bot.py",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
