@@ -341,26 +341,30 @@ async def download(url: str, job_dir: str, audio_only: bool):
     env = build_env()
     rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
 
-    # If format not available, retry with simplest possible selector.
+    # Retry with different strategies if format not available.
     if rc != 0 and re.search(
         r"requested format is not available", err, re.IGNORECASE
     ):
-        simple = [
-            sys.executable, "-m", "yt_dlp",
-            "--no-playlist", "--no-warnings", "--no-progress",
-            "--retries", "3", "--fragment-retries", "3",
-            "--no-simulate", "--print", "after_move:filepath",
-            "-o", out_tmpl,
-        ]
-        if os.path.exists(cookies_file):
-            simple += ["--cookies", cookies_file]
-        if FFMPEG_DIR:
-            simple += ["--ffmpeg-location", FFMPEG_DIR]
-        if audio_only:
-            simple += ["-x", "--audio-format", "mp3"]
-        else:
-            simple += ["-f", "b", "--merge-output-format", "mp4"]
-        rc, out, err = await run(simple + [url], DOWNLOAD_TIMEOUT, env)
+        for attempt in range(3):
+            cmd = [
+                sys.executable, "-m", "yt_dlp",
+                "--no-playlist", "--no-warnings", "--no-progress",
+                "--retries", "3", "--fragment-retries", "3",
+                "--no-simulate", "--print", "after_move:filepath",
+                "-o", out_tmpl,
+            ]
+            if attempt == 0:
+                cmd += ["--cookies", cookies_file] if os.path.exists(cookies_file) else []
+                cmd += ["-f", "b", "--merge-output-format", "mp4"]
+            elif attempt == 1:
+                cmd += ["-f", "b", "--merge-output-format", "mp4"]
+            else:
+                cmd += ["-f", "w", "--merge-output-format", "mp4"]
+            if FFMPEG_DIR:
+                cmd += ["--ffmpeg-location", FFMPEG_DIR]
+            rc, out, err = await run(cmd + [url], DOWNLOAD_TIMEOUT, env)
+            if rc == 0:
+                break
 
     if rc != 0:
         return None, err
