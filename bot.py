@@ -327,6 +327,10 @@ async def download(url: str, job_dir: str, audio_only: bool):
     ]
     if os.path.exists(cookies_file):
         base += ["--cookies", cookies_file]
+    base += [
+        "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+        "--extractor-args", "youtube:player_client=android",
+    ]
     if FFMPEG_DIR:
         base += ["--ffmpeg-location", FFMPEG_DIR]
     if audio_only:
@@ -360,6 +364,10 @@ async def download(url: str, job_dir: str, audio_only: bool):
                 cmd += ["-f", "b", "--merge-output-format", "mp4"]
             else:
                 cmd += ["-f", "w", "--merge-output-format", "mp4"]
+            cmd += [
+                "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+                "--extractor-args", "youtube:player_client=android",
+            ]
             if FFMPEG_DIR:
                 cmd += ["--ffmpeg-location", FFMPEG_DIR]
             rc, out, err = await run(cmd + [url], DOWNLOAD_TIMEOUT, env)
