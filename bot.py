@@ -569,7 +569,10 @@ async def process(context, status_msg, chat_id, user, url, audio_only):
 
             path, err = await download(url, job_dir, audio_only)
             if not path:
-                await safe_edit(status_msg, friendly_error(err))
+                msg = friendly_error(err)
+                last = [l for l in err.strip().splitlines() if l.strip()][-3:]
+                detail = "\n".join(last)
+                await safe_edit(status_msg, f"{msg}\n\n<code>{esc(detail[:200])}</code>")
                 return
 
             if not audio_only:
