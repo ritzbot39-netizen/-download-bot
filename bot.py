@@ -312,12 +312,14 @@ async def download(url: str, job_dir: str, audio_only: bool):
     """Download into a private job dir. Returns (filepath, error_message)."""
     out_tmpl = os.path.join(job_dir, "%(title).100B.%(ext)s")
     cookies_file = os.path.join(BASE_DIR, "cookies.txt")
-    # Write cookies from env var if file doesn't exist yet
     if not os.path.exists(cookies_file):
         cookies_env = os.getenv("YOUTUBE_COOKIES", "")
         if cookies_env:
+            raw = cookies_env.strip().replace("\r\n", "\n").replace("\r", "\n")
+            if not raw.startswith("# Netscape"):
+                raw = "# Netscape HTTP Cookie File\n" + raw
             with open(cookies_file, "w", encoding="utf-8") as f:
-                f.write(cookies_env)
+                f.write(raw + "\n")
     base = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist", "--no-warnings", "--no-progress",
