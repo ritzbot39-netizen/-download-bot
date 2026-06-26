@@ -333,6 +333,7 @@ async def download(url: str, job_dir: str, audio_only: bool):
         "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
         "--impersonate", "chrome",
         "--extractor-args", "youtube:player_skip=webpage;player_client=android,web;use_curl_cffi=True",
+        "--extractor-args", "tiktok:app_info=;api_hostname=api16-normal-c-useast1a.tiktokv.com",
     ]
     if FFMPEG_DIR:
         base += ["--ffmpeg-location", FFMPEG_DIR]
@@ -348,10 +349,18 @@ async def download(url: str, job_dir: str, audio_only: bool):
     env = build_env()
     rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
 
-    # Retry with different strategies if format not available.
-    if rc != 0 and re.search(
-        r"requested format is not available", err, re.IGNORECASE
-    ):
+    # Retry with different strategies if format or extraction failed.
+    if rc != 0:
+        is_format_err = bool(re.search(
+            r"requested format is not available", err, re.IGNORECASE))
+        is_tiktok_err = bool(re.search(
+            r"tiktok.*status code", err, re.IGNORECASE))
+    else:
+        is_format_err = is_tiktok_err = False
+
+    if is_format_err or is_tiktok_err:
+        tiktok_apps = ["musical_ly/35.1.3/2023501030/0", "trill/35.1.3/2023501030/1180", "aweme/35.1.3/2023501030/1128"]
+        tiktok_hosts = ["api16-normal-c-useast1a.tiktokv.com", "api16-normal-c-useast2a.tiktokv.com", "api16-normal-c-alisg.tiktokv.com"]
         for attempt in range(3):
             cmd = [
                 sys.executable, "-m", "yt_dlp",
@@ -360,13 +369,18 @@ async def download(url: str, job_dir: str, audio_only: bool):
                 "--no-simulate", "--print", "after_move:filepath",
                 "-o", out_tmpl,
             ]
-            if attempt == 0:
-                cmd += ["--cookies", cookies_file] if os.path.exists(cookies_file) else []
-                cmd += ["-f", "b", "--merge-output-format", "mp4"]
-            elif attempt == 1:
-                cmd += ["-f", "b", "--merge-output-format", "mp4"]
-            else:
-                cmd += ["-f", "w", "--merge-output-format", "mp4"]
+            if is_format_err:
+                if attempt == 0:
+                    cmd += ["--cookies", cookies_file] if os.path.exists(cookies_file) else []
+                    cmd += ["-f", "b", "--merge-output-format", "mp4"]
+                elif attempt == 1:
+                    cmd += ["-f", "b", "--merge-output-format", "mp4"]
+                else:
+                    cmd += ["-f", "w", "--merge-output-format", "mp4"]
+            if is_tiktok_err:
+                app = tiktok_apps[attempt]
+                host = tiktok_hosts[attempt]
+                cmd += ["--extractor-args", f"tiktok:app_info={app};api_hostname={host}"]
             cmd += [
                 "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
                 "--impersonate", "chrome",
