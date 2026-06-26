@@ -1,5 +1,6 @@
-"""Telegram bot that downloads video/audio from YouTube, TikTok, Instagram, X and
-hundreds of other sites via yt-dlp. Send a link, pick video or audio — done.
+"""Telegram bot that downloads video/audio from YouTube (incl. Shorts), TikTok,
+Instagram Reels, X and hundreds of other sites via yt-dlp. Send a link, pick
+video or audio — done.
 """
 
 import os
@@ -53,6 +54,13 @@ CAPTION = f"скачано с помощью @{BOT_USERNAME}"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
+COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
+
+# Browser-like UA used as a fallback when impersonation is unavailable.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # Telegram bot API caps uploads at 50 MB. Keep a margin when compressing.
 LIMIT_BYTES = 50 * 1024 * 1024
@@ -89,7 +97,7 @@ esc = html.escape
 
 
 # --------------------------------------------------------------------------- #
-# External tools discovery (ffmpeg / ffprobe / node)
+# External tools discovery (ffmpeg / ffprobe / deno / curl_cffi)
 # --------------------------------------------------------------------------- #
 
 def _find_bin(name: str) -> str | None:
@@ -107,17 +115,6 @@ def _find_bin(name: str) -> str | None:
     return None
 
 
-def _find_node_dir() -> str | None:
-    found = shutil.which("node")
-    if found:
-        return os.path.dirname(found)
-    if sys.platform == "win32":
-        guess = r"C:\Program Files\nodejs"
-        if os.path.exists(os.path.join(guess, "node.exe")):
-            return guess
-    return None
-
-
 FFMPEG = _find_bin("ffmpeg")
 FFPROBE = _find_bin("ffprobe")
 if not FFPROBE and FFMPEG:  # ffprobe usually ships next to ffmpeg
@@ -127,14 +124,29 @@ if not FFPROBE and FFMPEG:  # ffprobe usually ships next to ffmpeg
     if os.path.exists(sibling):
         FFPROBE = sibling
 FFMPEG_DIR = os.path.dirname(FFMPEG) if FFMPEG else None
-NODE_DIR = _find_node_dir()
-NODE_OK = NODE_DIR is not None
+
+# Directory of the running interpreter — where pip console scripts like `deno`
+# (the JS runtime yt-dlp uses for YouTube) live. Put it on the subprocess PATH.
+PY_BIN_DIR = os.path.dirname(sys.executable)
+
+
+def _detect_impersonate() -> str | None:
+    """`chrome` if curl_cffi is importable, else None — so a missing/broken
+    curl_cffi degrades gracefully instead of failing every single download."""
+    try:
+        import curl_cffi  # noqa: F401
+    except Exception:
+        return None
+    return "chrome"
+
+
+IMPERSONATE = _detect_impersonate()
 
 
 def build_env() -> dict:
-    """Environment for subprocesses with ffmpeg/node folders on PATH."""
+    """Environment for subprocesses with ffmpeg + the venv bin dir on PATH."""
     env = os.environ.copy()
-    extra = [p for p in (FFMPEG_DIR, NODE_DIR) if p]
+    extra = [p for p in (PY_BIN_DIR, FFMPEG_DIR) if p]
     if extra:
         env["PATH"] = os.pathsep.join(extra) + os.pathsep + env.get("PATH", "")
     return env
@@ -226,7 +238,8 @@ def friendly_error(stderr: str) -> str:
     if "age" in s and "restrict" in s:
         return "🔞 Видео с возрастным ограничением — не могу его скачать."
     if "sign in" in s or "log in" in s or "cookies" in s or "account" in s:
-        return "🔑 Для этого видео нужна авторизация — скачать не выйдет."
+        return ("🔑 Для этого видео нужна авторизация. "
+                "Админ может добавить cookies через переменную YOUTUBE_COOKIES.")
     if "geo" in s or "not available in your country" in s or "region" in s:
         return "🌍 Видео недоступно в регионе сервера."
     if "unsupported url" in s or "no video" in s or "no media" in s:
@@ -297,6 +310,28 @@ def prune_pending() -> None:
 # Downloading & media processing
 # --------------------------------------------------------------------------- #
 
+# Correct yt-dlp tiktok app_info format: iid/app_name/app_version/manifest/aid
+# (leading empty iid -> yt-dlp generates a device id itself).
+TIKTOK_APPS = [
+    "/musical_ly/35.1.3/2023501030/1233",
+    "/trill/35.1.3/2023501030/1180",
+    "/aweme/35.1.3/2023501030/1128",
+]
+TIKTOK_HOSTS = [
+    "api16-normal-c-useast1a.tiktokv.com",
+    "api22-normal-c-useast2a.tiktokv.com",
+    "api16-normal-c-alisg.tiktokv.com",
+]
+
+# Errors where retrying with another strategy is pointless.
+_FATAL_MARKERS = (
+    "is private", "private video", "private account",
+    "login required", "sign in to", "members-only", "this video is private",
+    "video unavailable", "has been removed", "account has been",
+    "not available in your country", "geo restrict",
+)
+
+
 def _newest_real_file(folder: str) -> str | None:
     candidates = []
     for name in os.listdir(folder):
@@ -308,102 +343,99 @@ def _newest_real_file(folder: str) -> str | None:
     return max(candidates, key=os.path.getsize)
 
 
-async def download(url: str, job_dir: str, audio_only: bool):
-    """Download into a private job dir. Returns (filepath, error_message)."""
-    out_tmpl = os.path.join(job_dir, "%(title).100B.%(ext)s")
-    cookies_file = os.path.join(BASE_DIR, "cookies.txt")
-    if not os.path.exists(cookies_file):
-        cookies_env = os.getenv("YOUTUBE_COOKIES", "")
-        if cookies_env:
-            raw = cookies_env.strip().replace("\r\n", "\n").replace("\r", "\n")
-            if not raw.startswith("# Netscape"):
-                raw = "# Netscape HTTP Cookie File\n" + raw
-            with open(cookies_file, "w", encoding="utf-8") as f:
-                f.write(raw + "\n")
-    base = [
+def _ensure_cookies_file() -> str | None:
+    """Return a cookies.txt path if one exists or can be built from env."""
+    if os.path.exists(COOKIES_FILE):
+        return COOKIES_FILE
+    raw = os.getenv("YOUTUBE_COOKIES", "").strip()
+    if not raw:
+        return None
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.startswith("# Netscape"):
+        raw = "# Netscape HTTP Cookie File\n" + raw
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            f.write(raw + "\n")
+        return COOKIES_FILE
+    except Exception:
+        return None
+
+
+def _base_cmd(out_tmpl: str, cookies_file: str | None) -> list[str]:
+    cmd = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist", "--no-warnings", "--no-progress",
-        "--retries", "3", "--fragment-retries", "3",
+        "--retries", "5", "--fragment-retries", "5",
+        "--socket-timeout", "30",
         "--no-simulate", "--print", "after_move:filepath",
         "-o", out_tmpl,
+        "--user-agent", USER_AGENT,
     ]
-    if os.path.exists(cookies_file):
-        base += ["--cookies", cookies_file]
-    base += [
-        "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-        "--impersonate", "chrome",
-        "--extractor-args", "youtube:player_skip=webpage;player_client=android,web;use_curl_cffi=True",
-        "--extractor-args", "tiktok:app_info=;api_hostname=api16-normal-c-useast1a.tiktokv.com",
-    ]
+    if IMPERSONATE:
+        cmd += ["--impersonate", IMPERSONATE]
+    if cookies_file:
+        cmd += ["--cookies", cookies_file]
     if FFMPEG_DIR:
-        base += ["--ffmpeg-location", FFMPEG_DIR]
+        cmd += ["--ffmpeg-location", FFMPEG_DIR]
+    return cmd
+
+
+def _video_args(strategy: str) -> list[str]:
+    """Format-selection args for a given fallback strategy."""
+    if strategy == "best":
+        return ["-f", "bv*+ba/b", "-S", "codec:h264,res:1080,ext:mp4:m4a",
+                "--merge-output-format", "mp4"]
+    if strategy == "single":
+        return ["-f", "b[ext=mp4]/b", "--merge-output-format", "mp4"]
+    return ["-f", "w", "--merge-output-format", "mp4"]  # worst — last resort
+
+
+def _build_attempts(url: str, audio_only: bool) -> list[list[str]]:
+    """Ordered list of extra-arg sets to try until one succeeds."""
     if audio_only:
-        base += ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
-    else:
-        base += [
-            "-f", "bv*+ba/b",
-            "-S", "codec:h264,res:1080,ext:mp4:m4a",
-            "--merge-output-format", "mp4",
-        ]
+        audio = ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
+        return [audio + ["-f", "ba/b"], audio]
 
-    env = build_env()
-    rc, out, err = await run(base + [url], DOWNLOAD_TIMEOUT, env)
+    attempts = [_video_args("best"), _video_args("single")]
+    if "tiktok" in url.lower():
+        for app, host in zip(TIKTOK_APPS, TIKTOK_HOSTS):
+            attempts.append(
+                _video_args("single")
+                + ["--extractor-args", f"tiktok:app_info={app};api_hostname={host}"]
+            )
+    attempts.append(_video_args("worst"))
+    return attempts
 
-    # Retry with different strategies if format or extraction failed.
-    if rc != 0:
-        is_format_err = bool(re.search(
-            r"requested format is not available", err, re.IGNORECASE))
-        is_tiktok_err = bool(re.search(
-            r"tiktok.*status code", err, re.IGNORECASE))
-    else:
-        is_format_err = is_tiktok_err = False
 
-    if is_format_err or is_tiktok_err:
-        tiktok_apps = ["musical_ly/35.1.3/2023501030/0", "trill/35.1.3/2023501030/1180", "aweme/35.1.3/2023501030/1128"]
-        tiktok_hosts = ["api16-normal-c-useast1a.tiktokv.com", "api16-normal-c-useast2a.tiktokv.com", "api16-normal-c-alisg.tiktokv.com"]
-        for attempt in range(3):
-            cmd = [
-                sys.executable, "-m", "yt_dlp",
-                "--no-playlist", "--no-warnings", "--no-progress",
-                "--retries", "3", "--fragment-retries", "3",
-                "--no-simulate", "--print", "after_move:filepath",
-                "-o", out_tmpl,
-            ]
-            if is_format_err:
-                if attempt == 0:
-                    cmd += ["--cookies", cookies_file] if os.path.exists(cookies_file) else []
-                    cmd += ["-f", "b", "--merge-output-format", "mp4"]
-                elif attempt == 1:
-                    cmd += ["-f", "b", "--merge-output-format", "mp4"]
-                else:
-                    cmd += ["-f", "w", "--merge-output-format", "mp4"]
-            if is_tiktok_err:
-                app = tiktok_apps[attempt]
-                host = tiktok_hosts[attempt]
-                cmd += ["--extractor-args", f"tiktok:app_info={app};api_hostname={host}"]
-            cmd += [
-                "--user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-                "--impersonate", "chrome",
-                "--extractor-args", "youtube:player_skip=webpage;player_client=android,web;use_curl_cffi=True",
-            ]
-            if FFMPEG_DIR:
-                cmd += ["--ffmpeg-location", FFMPEG_DIR]
-            rc, out, err = await run(cmd + [url], DOWNLOAD_TIMEOUT, env)
-            if rc == 0:
-                break
-
-    if rc != 0:
-        return None, err
-
+def _resolve_output(out: str, job_dir: str) -> str | None:
     # Prefer the exact path yt-dlp printed; fall back to scanning the job dir.
     for line in reversed(out.splitlines()):
         line = line.strip()
         if line and os.path.isfile(line):
-            return line, None
-    found = _newest_real_file(job_dir)
-    if found:
-        return found, None
-    return None, "Файл не найден после скачивания."
+            return line
+    return _newest_real_file(job_dir)
+
+
+async def download(url: str, job_dir: str, audio_only: bool):
+    """Download into a private job dir. Returns (filepath, error_message)."""
+    out_tmpl = os.path.join(job_dir, "%(title).100B.%(ext)s")
+    cookies_file = _ensure_cookies_file()
+    base = _base_cmd(out_tmpl, cookies_file)
+    env = build_env()
+
+    last_err = "Не удалось скачать."
+    for extra in _build_attempts(url, audio_only):
+        rc, out, err = await run(base + extra + [url], DOWNLOAD_TIMEOUT, env)
+        if rc == 0:
+            path = _resolve_output(out, job_dir)
+            if path:
+                return path, None
+            last_err = "Файл не найден после скачивания."
+            continue
+        last_err = err
+        if any(m in err.lower() for m in _FATAL_MARKERS):
+            break  # retrying with another format/host won't help
+    return None, last_err
 
 
 async def probe_duration(path: str) -> float | None:
@@ -413,7 +445,7 @@ async def probe_duration(path: str) -> float | None:
         rc, out, _ = await run(
             [FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", path],
-            PROBE_TIMEOUT,
+            PROBE_TIMEOUT, env=build_env(),
         )
         if rc == 0 and out.strip():
             return float(out.strip())
@@ -431,7 +463,7 @@ async def probe_video_codec(path: str) -> tuple[str, str]:
             [FFPROBE, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=codec_name,pix_fmt",
              "-of", "default=nw=1:nk=0", path],
-            PROBE_TIMEOUT,
+            PROBE_TIMEOUT, env=build_env(),
         )
         if rc != 0:
             return "", ""
@@ -449,14 +481,20 @@ async def probe_video_codec(path: str) -> tuple[str, str]:
 async def ensure_ios_compat(src: str, job_dir: str) -> str:
     """Ensure video plays on iOS: H.264 yuv420p MP4 with faststart.
 
-    Fast path: stream-copy remux when already H.264 + 8-bit (~1 s overhead).
-    Slow path: full re-encode for HEVC, VP9, 10-bit, etc.
+    Fast path (default): stream-copy remux + faststart — used when the codec is
+    already H.264/8-bit OR when we cannot probe (no ffprobe). Re-encoding is
+    reserved for codecs we *know* are incompatible (HEVC, VP9, AV1, 10-bit), so
+    we never needlessly transcode every download.
     """
     if not FFMPEG:
         return src
     codec, pix_fmt = await probe_video_codec(src)
     out = os.path.join(job_dir, "compat.mp4")
-    if codec == "h264" and pix_fmt in ("yuv420p", "yuvj420p"):
+
+    incompatible = codec in ("hevc", "h265", "vp9", "vp09", "av1", "av01") or (
+        codec == "h264" and pix_fmt not in ("yuv420p", "yuvj420p", "")
+    )
+    if not incompatible:
         rc, _, _ = await run(
             [FFMPEG, "-y", "-i", src, "-c", "copy", "-movflags", "+faststart", out],
             60, env=build_env(),
@@ -641,7 +679,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Привет, <b>{name}</b>!\n\n"
         "Я скачаю для тебя видео или музыку почти откуда угодно:\n\n"
-        "▶️ YouTube\n🎵 TikTok\n📸 Instagram\n🐦 X (Twitter)\n"
+        "▶️ YouTube (и Shorts)\n🎵 TikTok\n📸 Instagram Reels\n🐦 X (Twitter)\n"
         "…и ещё сотни сайтов.\n\n"
         "📎 Просто пришли ссылку — а я спрошу, что скачать: "
         "<b>видео</b> или <b>музыку</b>.\n\n"
@@ -809,8 +847,15 @@ async def post_init(app) -> None:
     if not FFMPEG:
         log.warning("ffmpeg not found — audio extraction, merging and "
                     "compression will not work!")
-    log.info("ready: ffmpeg=%s ffprobe=%s node=%s",
-             bool(FFMPEG), bool(FFPROBE), NODE_OK)
+    if not FFPROBE:
+        log.warning("ffprobe not found — falling back to copy-remux without "
+                    "codec checks and CRF-based compression.")
+    if not IMPERSONATE:
+        log.warning("curl_cffi not available — downloading without browser "
+                    "impersonation (some sites may bot-block more often).")
+    log.info("ready: ffmpeg=%s ffprobe=%s impersonate=%s deno=%s",
+             bool(FFMPEG), bool(FFPROBE), IMPERSONATE or False,
+             bool(shutil.which("deno", path=build_env()["PATH"])))
 
 
 def main() -> None:

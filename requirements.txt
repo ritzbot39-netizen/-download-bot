@@ -1,4 +1,8 @@
+# Pinned for reproducible Railway builds.
+# yt-dlp extras:
+#   default    -> crypto/requests/websockets + yt-dlp-ejs (YouTube JS solver)
+#   curl-cffi  -> browser impersonation (pulls curl_cffi 0.15.x, wheels for 3.12)
+#   deno       -> bundled Deno binary, the JS runtime yt-dlp uses for YouTube
 python-telegram-bot==22.8
 python-dotenv==1.1.0
-yt-dlp
-curl_cffi
+yt-dlp[default,curl-cffi,deno]==2026.6.9

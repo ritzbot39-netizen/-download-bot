@@ -1,8 +1,11 @@
+# Railway / Nixpacks build.
+#
+# Nixpacks auto-detects requirements.txt and builds a Python venv (pip included),
+# then puts its bin dir on PATH at runtime — so `python` is the venv interpreter
+# with all deps, and the bundled `deno` (yt-dlp's JS runtime for YouTube) is on
+# PATH too. We only need to add ffmpeg (which ships ffprobe) on top.
 [phases.setup]
-nixPkgs = ["python3", "nodejs_22", "ffmpeg"]
-
-[phases.install]
-cmds = ["python3 -m venv /app/.venv && /app/.venv/bin/pip install -r requirements.txt"]
+aptPkgs = ["ffmpeg"]
 
 [start]
-cmd = "/app/.venv/bin/python bot.py"
+cmd = "python bot.py"
